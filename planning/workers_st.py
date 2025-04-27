@@ -7,13 +7,24 @@ import pandas as pd
 # --------------------------
 days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 shifts = ["day", "night"]
-stations = list(range(4))  # Number of parallel workstations
-workers = [f"W{i}" for i in range(1, 11)]  # Shared global worker pool
+
+# Streamlit Sidebar Inputs
+st.sidebar.title("Settings")
+num_workers = st.sidebar.slider("Number of workers", min_value=2, max_value=20, value=10)
+worker_names = st.sidebar.text_input(
+    "Worker Names (comma separated)", 
+    value=", ".join([f"W{i}" for i in range(1, num_workers + 1)])
+)
+num_stations = st.sidebar.slider("Number of stations", min_value=1, max_value=10, value=4)
+
+# Parse workers
+workers = [name.strip() for name in worker_names.split(",") if name.strip()]
+stations = list(range(num_stations+1))
 
 # --------------------------
 # Helper Functions
 # --------------------------
-def build_model():
+def build_model(workers, stations):
     model = ConcreteModel()
 
     model.works = Var(
@@ -43,7 +54,7 @@ def build_model():
                 for day in days
                 for shift in shifts
             )
-            - 10 * sum(model.deviation[worker] for worker in workers)
+            -  sum(model.deviation[worker] for worker in workers)
         ),
         sense=maximize,
     )
@@ -122,15 +133,15 @@ def build_model():
     return model
 
 def solve_model(model):
-    opt = SolverFactory("glpk", solver_io="python")
+    opt = SolverFactory("cbc")
     opt.options["sec"] = 10
     results = opt.solve(model, tee=True)
     return results
 
-def get_workers_needed(needed):
-    return [worker for worker in workers if needed[worker].value == 1]
+def get_workers_needed(model, workers):
+    return [worker for worker in workers if model.needed[worker].value == 1]
 
-def get_work_table(works):
+def get_work_table(model, workers, stations):
     schedule = {
         station: {day: {shift: [] for shift in shifts} for day in days}
         for station in stations
@@ -139,11 +150,11 @@ def get_work_table(works):
         for station in stations:
             for day in days:
                 for shift in shifts:
-                    if works[worker, station, day, shift].value == 1:
+                    if model.works[worker, station, day, shift].value == 1:
                         schedule[station][day][shift].append(worker)
     return schedule
 
-def generate_worker_schedule(model):
+def generate_worker_schedule(model, workers, stations):
     worker_schedule = {}
     for worker in workers:
         worker_schedule[worker] = []
@@ -161,12 +172,12 @@ st.title("Worker Shift Scheduling Optimization")
 
 if st.button("Run Optimization"):
     with st.spinner("Solving optimization model..."):
-        model = build_model()
+        model = build_model(workers, stations)
         solve_model(model)
 
-        workers_needed = get_workers_needed(model.needed)
-        week_table = get_work_table(model.works)
-        worker_schedule = generate_worker_schedule(model)
+        workers_needed = get_workers_needed(model, workers)
+        week_table = get_work_table(model, workers, stations)
+        worker_schedule = generate_worker_schedule(model, workers, stations)
 
     st.success("Optimization complete!")
 
@@ -195,8 +206,7 @@ if st.button("Run Optimization"):
         else:
             st.write("- (No shifts assigned)")
 
-st.sidebar.title("Settings")
 st.sidebar.info(
-    "This app solves a worker scheduling problem using Pyomo and CBC solver. "
-    "Press the button above to run optimization and display the results."
+    "Select the number of workers, input worker names (comma separated), and number of stations."
+    " Then press 'Run Optimization'!"
 )
